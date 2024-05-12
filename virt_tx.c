@@ -59,11 +59,12 @@ struct state {
 
 
 bool net_queue_empty_free(struct net_queue_handle *queue)
-//@ requires net_queue_handle_free(queue, _) &*& net_queue_handle_size(queue, _);
-//
+//@ requires true &*& net_queue_handle_size(queue, _);
+//@ ensures true;
 {
 
   return queue->size != 0;
+  //@ leak net_queue_handle_size(queue, _);
 }
 
 /* int extract_offset(uintptr_t *phys, struct state *gstate)
