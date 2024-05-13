@@ -21,6 +21,8 @@ struct net_queue {
     uint32_t consumer_signalled;
     /* buffer descripter array */
     struct net_buff_desc *buffers;
+
+    //@ list<struct net_buff_desc> ghost_buffers;
 };
 
 struct net_queue_handle {
@@ -58,13 +60,83 @@ struct state {
 };
 
 
-bool net_queue_empty_free(struct net_queue_handle *queue)
-//@ requires true &*& net_queue_handle_size(queue, _);
-//@ ensures true;
-{
+/*@
+ predicate unfold_queue(struct net_queue_handle *queue, uint32_t free_tail, uint32_t free_head, uint32_t active_tail, uint32_t active_head, uint32_t qsize) =
+   queue->free |-> ?gfree &*& queue->active |-> ?gactive &*& gfree->tail |-> free_tail &*& gfree->head |-> free_head &*&
+     gactive->tail |-> active_tail &*& gactive->head |-> active_head &*&
+     queue->size |-> qsize;
+@*/
 
-  return queue->size != 0;
-  //@ leak net_queue_handle_size(queue, _);
+bool net_queue_empty_free(struct net_queue_handle *queue)
+//@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (ftail -fhead) >= 0 &*& qsize > 0;
+//@ ensures unfold_queue(queue, _, _, _, _, _);
+{
+    //@open unfold_queue(queue,_, _, _, _, _);
+    return !((queue->free->tail - queue->free->head) % queue->size);
+    //@close unfold_queue(queue, _, _, _, _, _);
+}
+
+/**
+ * Check if the active queue is empty.
+ *
+ * @param queue queue handle for the active queue to check.
+ *
+ * @return true indicates the queue is empty, false otherwise.
+ */
+bool net_queue_empty_active(struct net_queue_handle *queue)
+//@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (atail - ahead) >= 0 &*& qsize > 0;
+//@ ensures unfold_queue(queue, _, _, _, _, _);
+{
+    //@open unfold_queue(queue, _, _, _, _, _);
+    return !((queue->active->tail - queue->active->head) % queue->size);
+    //@close unfold_queue(queue, _, _, _, _, _);
+}
+
+bool net_queue_full_free(struct net_queue_handle *queue)
+//@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (ftail + 1) <= 0xffffffff &*& ((ftail + 1) -fhead) >= 0 &*& qsize > 0;
+//@ ensures unfold_queue(queue, _, _, _, _, _);
+{
+    //@open unfold_queue(queue, _, _, _, _, _);
+    return !((queue->free->tail + 1 - queue->free->head) % queue->size);
+    //@close unfold_queue(queue, _, _, _, _, _);
+}
+
+
+bool net_queue_full_active(struct net_queue_handle *queue)
+//@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (atail + 1) <= 4294967295 &*& ((atail + 1) - ahead) >= 0 &*& qsize > 0;
+//@ ensures unfold_queue(queue, _, _, _, _, _);
+{
+    //@open unfold_queue(queue, _, _, _, _, _);
+    return !((queue->active->tail + 1 - queue->active->head) % queue->size);
+    //@close unfold_queue(queue, _, _, _, _, _);
+}
+
+
+/*@
+predicate net_buff_desc(struct net_buff_desc *desc, uint64_t io_or_offset, uint64_t len) = 
+  desc->io_or_offset |-> io_or_offset &*& desc->len |-> len;
+@*/
+
+/*@
+
+@*/
+
+/*@
+predicate valid_buffers(struct net_buff_desc *buffers, int num_buffers, list<struct net_buff_desc> nbdl) =
+  num_buffers == 0 ?
+    nbdl == nil
+  :
+   net_buff_desc(buffers, ?io_or_offset, ?len);
+
+@*/
+int net_enqueue_free(struct net_queue_handle *queue, struct net_buff_desc buffer)
+{
+    if (net_queue_full_free(queue)) return -1;
+
+    queue->free->buffers[queue->free->tail % queue->size] = buffer;
+    queue->free->tail++;
+
+    return 0;
 }
 
 /* int extract_offset(uintptr_t *phys, struct state *gstate)
