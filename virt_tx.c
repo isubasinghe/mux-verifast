@@ -118,7 +118,15 @@ predicate net_buff_desc(struct net_buff_desc *desc, uint64_t io_or_offset, uint6
 @*/
 
 /*@
-
+lemma struct net_buff_desc create_struct_net_buff_desc(uint64_t io_or_offset, uint64_t len)
+requires true;
+ensures result.io_or_offset == io_or_offset &*& result.len == len;
+{
+  struct net_buff_desc result;
+  result.io_or_offset = io_or_offset;
+  result.len = len;
+  return result;
+}
 @*/
 
 /*@
