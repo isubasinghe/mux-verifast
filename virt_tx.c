@@ -117,26 +117,22 @@ predicate net_buff_desc(struct net_buff_desc *desc, uint64_t io_or_offset, uint6
   desc->io_or_offset |-> io_or_offset &*& desc->len |-> len;
 @*/
 
-/*@
-lemma struct net_buff_desc create_struct_net_buff_desc(uint64_t io_or_offset, uint64_t len)
-requires true;
-ensures result.io_or_offset == io_or_offset &*& result.len == len;
-{
-  struct net_buff_desc result;
-  result.io_or_offset = io_or_offset;
-  result.len = len;
-  return result;
-}
-@*/
 
 /*@
 predicate valid_buffers(struct net_buff_desc *buffers, int num_buffers, list<struct net_buff_desc> nbdl) =
   num_buffers == 0 ?
     nbdl == nil
   :
-   net_buff_desc(buffers, ?io_or_offset, ?len);
-
+   net_buff_desc(buffers, ?io_or_offset, ?len) &*& valid_buffers(buffers -1, num_buffers -1, ?nnbdl) &*& 
+     nnbdl == cons(?gel, nnbdl) &*& gel.io_or_offset == io_or_offset &*& gel.len == len;
 @*/
+
+
+/*@
+predicate pre_net_enqueue_free(struct net_queue_handle *queue, struct net_buff_desc buffer) = 
+  queue->free |-> ?qfree;
+@*/
+
 int net_enqueue_free(struct net_queue_handle *queue, struct net_buff_desc buffer)
 {
     if (net_queue_full_free(queue)) return -1;
