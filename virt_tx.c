@@ -1,9 +1,45 @@
 #include <stdint.h>
 #include <stdbool.h>
+#define CONFIG_L1_CACHE_LINE_SIZE_BITS 64
 #define DRIVER 0
 #define CLIENT_CH 1
 #define NUM_CLIENTS 3
 #define NET_BUFFER_SIZE 2048
+
+#define ROUND_DOWN(n, b) (((n) >> (b)) << (b))
+#define LINE_START(a) ROUND_DOWN(a, CONFIG_L1_CACHE_LINE_SIZE_BITS)
+#define LINE_INDEX(a) (LINE_START(a)>>CONFIG_L1_CACHE_LINE_SIZE_BITS)
+
+static inline void
+dsb(void)
+{
+    // asm volatile("dsb sy" ::: "memory");
+}
+
+void 
+dmb(void)
+{
+    // asm volatile("dmb sy" ::: "memory");
+}
+
+
+void
+clean_by_va(unsigned long vaddr)
+{
+    // asm volatile("dc cvac, %0" : : "r"(vaddr));
+    dmb();
+}
+void
+cache_clean(unsigned long start, unsigned long end)
+{
+    unsigned long line;
+    unsigned long index;
+
+    for (index = LINE_INDEX(start); index < LINE_INDEX(end) + 1; index++) {
+        line = index << CONFIG_L1_CACHE_LINE_SIZE_BITS;
+        clean_by_va(line);
+    }
+}
 
 struct net_buff_desc {
     /* offset of buffer within buffer memory region or io address of buffer */
@@ -66,18 +102,28 @@ predicate net_buff_desc(struct net_buff_desc *desc, uint64_t io_or_offset, uint6
 
 
 /*@
-predicate valid_buffers(struct net_buff_desc *buffers, int num_buffers, list<struct net_buff_desc> nbdl) =
-  num_buffers == 0 ?
-    nbdl == nil
-  :
-   net_buff_desc(buffers, ?io_or_offset, ?len) &*& valid_buffers(buffers -1, num_buffers -1, ?nnbdl) &*& 
-     nnbdl == cons(?gel, nnbdl) &*& gel.io_or_offset == io_or_offset &*& gel.len == len;
+predicate vbuffers(struct net_buff_desc *buffers, int count) = 
+  count <= 0 ? true : net_buff_desc(buffers, _, _) &*& vbuffers(buffers + 1, count - 1);
+
+lemma void split_buffers_chunk(struct net_buff_desc *start, int i)
+    requires vbuffers(start, ?count) &*& 0 <= i &*& i <= count;
+    ensures vbuffers(start, i) &*& vbuffers(start + i, count - i);
+{
+  if(i==0) {
+    close vbuffers(start, 0);
+  }else {
+    open vbuffers(start, count);
+    split_buffers_chunk(start + 1, i - 1);
+    close vbuffers(start, i);
+  }
+}
+
 @*/
 
 /*@
  predicate unfold_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, struct net_buff_desc *buffers, list<struct net_buff_desc> gbufs) = 
    q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& q->buffers |-> buffers &*& q->ghost_buffers |-> gbufs &*&
-   valid_buffers(buffers, 2048, gbufs);
+   vbuffers(buffers, 2048);
 
  predicate unfold_queue(struct net_queue_handle *queue, uint32_t free_tail, uint32_t free_head, uint32_t active_tail, uint32_t active_head, uint32_t qsize) =
    queue->free |-> ?gfree &*& queue->active |-> ?gactive &*&
@@ -86,7 +132,7 @@ predicate valid_buffers(struct net_buff_desc *buffers, int num_buffers, list<str
 
 bool net_queue_empty_free(struct net_queue_handle *queue)
 //@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (ftail -fhead) >= 0 &*& qsize > 0;
-//@ ensures unfold_queue(queue, _, _, _, _, _);
+//@ ensures unfold_queue(queue, _, _, _, _, qsize);
 {
     //@ open unfold_queue(queue, _, _, _, _, _);
     uint32_t size = queue->size;
@@ -173,11 +219,9 @@ int net_enqueue_free(struct net_queue_handle *queue, struct net_buff_desc buffer
     //@open unfold_net_queue(free, _, _, _, _, _);
     struct net_buff_desc *buffers = free->buffers;
 
-    //@open valid_buffers(buffers, 2048, free->ghost_buffers);
-    //
     buffers[free->tail % size] = buffer;
     free->tail++;
-    //@close valid_buffers(buffers, 2048, free->ghost_buffers);
+
     //@close unfold_net_queue(free, _, _, _, _, _); 
     //@close unfold_queue(queue, _, _, _, _, _);
 
@@ -194,12 +238,26 @@ int net_enqueue_active(struct net_queue_handle *queue, struct net_buff_desc buff
     return 0;
 }
 
-int net_dequeue_free(struct net_queue_handle *queue, struct net_buff_desc *buffer) {
+int net_dequeue_free(struct net_queue_handle *queue, struct net_buff_desc *buffer) 
+//requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsz) &*& (ftail - fhead) >= 0 &*& qsz > 0;
+//ensures unfold_queue(queue, _, _, _, _, _);
+{
   if(net_queue_empty_free(queue)) {
     return -1;
   }
-  *buffer = queue->free->buffers[queue->free->head % queue->size];
-  queue->free->head++;
+
+  //@open unfold_queue(queue, _, _, _, _, _);
+  uint32_t size = queue->size;
+  //@assert size > 0;
+  struct net_queue *free = queue->free;
+
+  //@open unfold_net_queue(free, _, _, _, _, _);
+ 
+  *buffer = free->buffers[free->head % size];
+  free->head++;
+
+  //@close unfold_net_queue(free, _, _, _, _, _);
+  //@close unfold_queue(queue, _, _, _, _, _);
   return 0;
 }
 
@@ -233,6 +291,17 @@ void net_request_signal_free(struct net_queue_handle *queue)
 {
     queue->free->consumer_signalled = 0;
 }
+
+void net_request_signal_active(struct net_queue_handle *queue)
+{
+    queue->active->consumer_signalled = 0;
+}
+
+void net_cancel_signal_free(struct net_queue_handle*queue)
+{
+    queue->free->consumer_signalled = 1;
+}
+
 
 void net_cancel_signal_active(struct net_queue_handle *queue)
 {
