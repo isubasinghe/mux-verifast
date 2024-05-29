@@ -121,26 +121,25 @@ lemma void split_buffers_chunk(struct net_buff_desc *start, int i)
 @*/
 
 /*@
- predicate unfold_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, struct net_buff_desc *buffers, list<struct net_buff_desc> gbufs) = 
-   q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& q->buffers |-> buffers &*& q->ghost_buffers |-> gbufs &*&
-   vbuffers(buffers, 2048);
+ predicate unfold_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, struct net_buff_desc *buffers, uint64_t sz, list<struct net_buff_desc> gbufs) = 
+   q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& q->buffers |-> buffers &*& q->ghost_buffers |-> gbufs &*& vbuffers(buffers, sz);
 
  predicate unfold_queue(struct net_queue_handle *queue, uint32_t free_tail, uint32_t free_head, uint32_t active_tail, uint32_t active_head, uint32_t qsize) =
-   queue->free |-> ?gfree &*& queue->active |-> ?gactive &*&
-   unfold_net_queue(gfree, free_tail, free_head, _, _, _) &*& unfold_net_queue(gactive, active_tail, active_head, _, _, _) &*& queue->size |-> qsize;
+   queue->free |-> ?gfree &*& queue->active |-> ?gactive &*& queue->size |-> qsize &*&
+   unfold_net_queue(gfree, free_tail, free_head, _, _, qsize, _) &*& unfold_net_queue(gactive, active_tail, active_head, _, _, qsize, _);
 @*/
 
 bool net_queue_empty_free(struct net_queue_handle *queue)
 //@ requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsize) &*& (ftail -fhead) >= 0 &*& qsize > 0;
-//@ ensures unfold_queue(queue, _, _, _, _, qsize);
+//@ ensures unfold_queue(queue, ftail, fhead, atail, ahead, qsize);
 {
     //@ open unfold_queue(queue, _, _, _, _, _);
     uint32_t size = queue->size;
     struct net_queue *free = queue->free;
     
-    //@open unfold_net_queue(free, _, _, _, _, _);
+    //@open unfold_net_queue(free, _, _, _, _, qsize, _);
     bool retval = !((free->tail - free->head));
-    //@close unfold_net_queue(free, _, _, _, _, _);
+    //@close unfold_net_queue(free, _, _, _, _, qsize, _);
 
     //@close unfold_queue(queue, _, _, _, _, _);
     return retval;
@@ -162,9 +161,9 @@ bool net_queue_empty_active(struct net_queue_handle *queue)
     uint32_t size = queue->size;
     struct net_queue *active = queue->active;
     
-    //@open unfold_net_queue(active, _, _, _, _, _);
+    //@open unfold_net_queue(active, _, _, _, _, qsize, _);
     bool retval = !((active->tail - active->head) % size);
-    //@close unfold_net_queue(active, _, _, _, _, _);
+    //@close unfold_net_queue(active, _, _, _, _,qsize, _);
     //@close unfold_queue(queue, _, _, _, _, _);
     return retval;
 }
@@ -177,9 +176,9 @@ bool net_queue_full_free(struct net_queue_handle *queue)
     uint32_t size = queue->size;
     struct net_queue *free = queue->free;
 
-    //@open unfold_net_queue(free, _, _, _, _, _);
+    //@open unfold_net_queue(free, _, _, _, _, qsize, _);
     bool retval = !((free->tail + 1 - free->head) % size);
-    //@close unfold_net_queue(free, _, _, _, _, _);
+    //@close unfold_net_queue(free, _, _, _,_, qsize, _);
     
     //@close unfold_queue(queue, _, _, _, _, _);
     
@@ -195,9 +194,9 @@ bool net_queue_full_active(struct net_queue_handle *queue)
     uint32_t size = queue->size;
     struct net_queue *active = queue->active;
   
-    //@open unfold_net_queue(active, _, _, _, _, _);
+    //@open unfold_net_queue(active, _, _, _, _, qsize, _);
     bool retval = !((active->tail + 1 - active->head) % size);
-    //@close unfold_net_queue(active, _, _, _, _, _);
+    //@close unfold_net_queue(active, _, _, _, _, qsize, _);
     
     //@close unfold_queue(queue, _, _, _, _, _);
     return retval;
@@ -211,18 +210,18 @@ int net_enqueue_free(struct net_queue_handle *queue, struct net_buff_desc buffer
       return -1;
     }
 
-    //@open unfold_queue(queue, _, _, _, _, ?gsize);
+    //@open unfold_queue(queue, _, _, _, _, _);
     uint32_t size = queue->size;
     //@assert size > 0;
     struct net_queue *free = queue->free;
 
-    //@open unfold_net_queue(free, _, _, _, _, _);
+    //@open unfold_net_queue(free, _, _, _, _, _, _);
     struct net_buff_desc *buffers = free->buffers;
 
     buffers[free->tail % size] = buffer;
     free->tail++;
 
-    //@close unfold_net_queue(free, _, _, _, _, _); 
+    //@close unfold_net_queue(free, _, _, _, _, _, qsize); 
     //@close unfold_queue(queue, _, _, _, _, _);
 
     return 0;
@@ -238,27 +237,43 @@ int net_enqueue_active(struct net_queue_handle *queue, struct net_buff_desc buff
     return 0;
 }
 
-int net_dequeue_free(struct net_queue_handle *queue, struct net_buff_desc *buffer) 
-//requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsz) &*& (ftail - fhead) >= 0 &*& qsz > 0;
-//ensures unfold_queue(queue, _, _, _, _, _);
+int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len) 
+//@requires unfold_queue(queue, ?ftail, ?fhead, ?atail, ?ahead, ?qsz) &*& (ftail - fhead) >= 0 &*& qsz > 0 &*& fhead < qsz;
+//@ensures unfold_queue(queue, _, _, _, _, _);
 {
   if(net_queue_empty_free(queue)) {
     return -1;
   }
-
+  
+  uint64_t val;
   //@open unfold_queue(queue, _, _, _, _, _);
   uint32_t size = queue->size;
   //@assert size > 0;
   struct net_queue *free = queue->free;
 
-  //@open unfold_net_queue(free, _, _, _, _, _);
- 
-  *buffer = free->buffers[free->head % size];
-  free->head++;
+  //@open unfold_net_queue(free, _, _, _, ?gbuf, qsz, _);
+  
+  struct net_buff_desc *buffers = free->buffers;
 
-  //@close unfold_net_queue(free, _, _, _, _, _);
+  //@open vbuffers(buffers, qsz);
+  //@assert qsz == size;
+  //@assume(fhead % size <= size);
+  //@assert (fhead % size) <= size;
+  struct net_buff_desc *d = &buffers[free->head];
+  val = d->io_or_offset;
+
+  uint32_t new_head = /*@truncating@*/(free->head + 1);
+  if(new_head >= size) {
+    new_head = size - 1;
+  }
+  free->head = new_head;
+  //@ assert free-head <= size;
+  //@close vbuffers(buffers, qsz);
+
+  //@close unfold_net_queue(free, _, _, _, _, qsz, _);
   //@close unfold_queue(queue, _, _, _, _, _);
   return 0;
+  
 }
 
 int net_dequeue_active(struct net_queue_handle *queue, struct net_buff_desc *buffer)
@@ -402,7 +417,7 @@ void tx_return(struct state *state)
     while (reprocess) {
         while (!net_queue_empty_free(&state->tx_queue_drv)) {
             struct net_buff_desc buffer;
-            int err = net_dequeue_free(&state->tx_queue_drv, &buffer);
+            int err = net_dequeue_free(&state->tx_queue_drv, &buffer.io_or_offset, &buffer.len);
             assert(!err);
 
             int client = extract_offset(&buffer.io_or_offset, state);
