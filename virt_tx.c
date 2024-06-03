@@ -10,6 +10,11 @@
 #define LINE_START(a) ROUND_DOWN(a, CONFIG_L1_CACHE_LINE_SIZE_BITS)
 #define LINE_INDEX(a) (LINE_START(a)>>CONFIG_L1_CACHE_LINE_SIZE_BITS)
 
+
+void microkit_notify(uint64_t ch);
+
+void microkit_notify_delayed(uint64_t ch);
+
 static inline void
 dsb(void)
 {
