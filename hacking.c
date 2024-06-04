@@ -3,54 +3,47 @@
 #include <stdint.h>
 
 
-struct node {
-  int x;
-  int y;
+struct buff_desc {
+  int io_or_offsets;
+  int len;
 };
+
 struct strct {
-  struct node *nodes;
-  int *x;
+  struct buff_desc *buffers;
   uint64_t len;
 };
 
 /*@
-predicate structs(struct strct *s, struct node *nodes, uint64_t len) = 
-  malloc_block_strct(s) &*& s->nodes |-> nodes &*& s->len |-> len;
+predicate structs(struct strct *s, int *xs, int *ys, uint64_t len) = 
+  malloc_block_strct(s) &*& s->xs |-> xs &*& s->ys |-> ys &*& s->len |-> len &*& 
+    xs[0..len] |-> ?vxs &*& ys[0..len] |-> ?vys &*& 
+    malloc_block_ints(xs, len) &*& malloc_block_ints(ys, len);
 @*/
 
 struct strct * create_structs(uint64_t len)
-//@requires 0 <= (len * sizeof(struct node)) &*& (len * sizeof(struct node)) <= UINTPTR_MAX;
-//@ensures structs(result, _, len);
+//@requires 0 <= (len * sizeof(int)) &*& (len * sizeof(int)) <= UINTPTR_MAX;
+//@ensures structs(result, _, _, len);
 {
   struct strct *s = malloc(sizeof(struct strct));
-  int *x = malloc(len *sizeof(int));
-  if(x == NULL) {
-    abort();
-  }
-  struct node *nodes = malloc(len * sizeof(struct node));
-  if(nodes == NULL) {
+  int *xs = malloc(len *sizeof(int));
+  if(xs == NULL) {
     abort();
   }
   
+  int *ys = malloc(len*sizeof(int));
+  if(ys == NULL) {
+    abort();
+  }
   if(s == NULL) {
     abort();
   }
-  s->nodes = nodes;
+  s->xs = xs;
+  s->ys = ys;
   s->len = len;
-  //@leak chars((char *)nodes, len*sizeof(struct node), _);
-  //@leak malloc_block_chars((char *)nodes, len*sizeof(struct node));
-  //@close structs(s, nodes, len);
+  //@close structs(s, xs, ys, len);
 
   return s;
 }
 
 
-void set_struct(struct strct *s, uint64_t index, int x, int y)
-//@requires structs(s, _, ?len) &*& index < len;
-//@ensures structs(s, _, len); 
-{
-  //@open structs(s, _, _);
-  s->nodes[index].x = x;
-  s->nodes[index].y = y;
-  //@close structs(s, _, _);
-}
+
