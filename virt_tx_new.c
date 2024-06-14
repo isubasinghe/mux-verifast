@@ -190,10 +190,15 @@ uint64_t tail_mod_size(uint64_t tail, uint64_t size)
     uint64_t retval = tail%size;
     return retval;
 }
+/*@
+fixpoint bool net_queue_full(int tail, int head, int size){
+  return tail + 1 - head == size;
+}
+@*/
 
 int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
-//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize);
+//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& (!net_queue_full(ftail, fhead, gsize)) || (net_queue(;
 {
     if (net_queue_full_free(queue)) {
       return -1;
