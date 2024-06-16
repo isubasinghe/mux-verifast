@@ -182,23 +182,27 @@ bool net_queue_full_active(struct net_queue_handle *queue)
     //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 }
 
-uint64_t tail_mod_size(uint64_t tail, uint64_t size) 
+uint64_t val_mod_size(uint64_t val, uint64_t size) 
 //@ requires size == RING_SIZE;
 //@ ensures result < RING_SIZE;
 {
-    //@assume(tail%size < size);
-    uint64_t retval = tail%size;
+    //@assume(val%size < size);
+    uint64_t retval = val%size;
     return retval;
 }
 /*@
 fixpoint bool net_queue_full(int tail, int head, int size){
-  return tail + 1 - head == size;
+  return truncate_unsigned(truncate_unsigned(tail + 1, 32) - head, 32) == size;
+}
+
+fixpoint bool impl(bool cond1, bool cond2) {
+  return !cond1 || cond2;
 }
 @*/
 
 int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
-//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& (!net_queue_full(ftail, fhead, gsize)) || (net_queue(;
+//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& impl(net_queue_full(ftail, fhead, gsize), result == -1) == true &*& impl(!net_queue_full(ftail, fhead, gsize), nftail == truncate_unsigned(ftail +1 ,32)) == true;
 {
     if (net_queue_full_free(queue)) {
       return -1;
@@ -211,7 +215,7 @@ int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint
   
     uint64_t *io_or_offsets = free->io_or_offsets;
     uint16_t *lens = free->lens;
-    uint64_t index = tail_mod_size(free->tail, queue->size);
+    uint64_t index = val_mod_size(free->tail, queue->size);
     
     io_or_offsets[index] = io_or_offset;
     lens[index] = len;
@@ -227,51 +231,84 @@ int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint
 }
 
 int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, ?natail, ahead, gsize);
 {
     if (net_queue_full_active(queue)) {
         return -1;
     }
-
-    queue->active->buffers[queue->active->tail % queue->size].io_or_offset = io_or_offset;
-    queue->active->buffers[queue->active->tail % queue->size].len = len;
-    queue->active->tail++;
+    //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
+    uint32_t size = queue->size;
+    struct net_queue *active = queue->active;
+    
+    //@ open mk_net_queue(gactive, atail, _, _, _, _);
+    uint64_t *io_or_offsets = active->io_or_offsets;
+    uint16_t *lens = active->lens;
+    uint64_t index = val_mod_size(active->tail, size);
+    
+    io_or_offsets[index] = 0;
+    lens[index] = 0;
+    uint32_t new_tail = /*@truncating@*/(active->tail + 1);
+    active->tail = new_tail;
+    
+    //@ close mk_net_queue(gactive, new_tail, _, _, _, _);
+    
+    //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, new_tail, ahead, gsize);
 
     return 0;
 }
 
-int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len) 
+int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& *io_or_offset |-> _ &*& *len |-> _;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, ?nfhead, gactive, atail, ahead, gsize) &*& *io_or_offset |-> _ &*& *len |-> _;
 {
   if(net_queue_empty_free(queue)) {
     return -1;
   }
-  
-  uint64_t val;
+  //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
   uint32_t size = queue->size;
   struct net_queue *free = queue->free;
   
-  struct net_buff_desc *buffers = free->buffers;
-
-  struct net_buff_desc *d = &buffers[free->head];
-  val = d->io_or_offset;
+  //@ open mk_net_queue(gfree, _, _, _, _, _);
+  uint64_t *io_or_offsets = free->io_or_offsets;
+  uint16_t *lens = free->lens;
+  uint64_t index = val_mod_size(free->head, size);
+  
+  *io_or_offset = io_or_offsets[index];
+  *len = lens[index];
 
   uint32_t new_head = /*@truncating@*/(free->head + 1);
-  if(new_head >= size) {
-    new_head = size - 1;
-  }
   free->head = new_head;
+  
+  //@close mk_net_queue(gfree, _, _, _, _, _);
+  
+  //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
   return 0;
   
 }
 
 int net_dequeue_active(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&  *io_or_offset |-> _ &*& *len |-> _;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ?nahead, gsize) &*& *io_or_offset |-> _ &*& *len |-> _;
 {
     if (net_queue_empty_active(queue)) {
       return -1;
     }
-
-    *io_or_offset = queue->active->buffers[queue->active->head % queue->size].io_or_offset;
-    *len = queue->active->buffers[queue->active->head % queue->size].len;
-    queue->active->head++;
+    //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
+    uint32_t size = queue->size;
+    //@open mk_net_queue(gactive, _, _, _, _, _);
+    uint64_t *io_or_offsets = queue->active->io_or_offsets;
+    uint16_t *lens = queue->active->lens;
+    uint64_t index = val_mod_size(queue->active->head, size);
+    *io_or_offset = io_or_offsets[index];
+    *len = lens[index];
+    uint32_t new_head = /*@truncating@*/(queue->active->head + 1);
+    queue->active->head = new_head;
+    
+    //@close mk_net_queue(gactive, _, _, _, _, _);
+    
+    //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    
     return 0;
 }
 
@@ -291,24 +328,48 @@ void net_buffers_init(struct net_queue_handle *queue, uintptr_t base_addr)
 }
 
 void net_request_signal_free(struct net_queue_handle *queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gfree, _, _, _, _, _ );
     queue->free->consumer_signalled = 0;
+    //@ close mk_net_queue(gfree, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 void net_request_signal_active(struct net_queue_handle *queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gactive, _, _, _, _, _ );
     queue->active->consumer_signalled = 0;
+    //@ close mk_net_queue(gactive, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 void net_cancel_signal_free(struct net_queue_handle*queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gfree, _, _, _, _, _ );
     queue->free->consumer_signalled = 1;
+    //@ close mk_net_queue(gfree, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 
 void net_cancel_signal_active(struct net_queue_handle *queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gactive, _, _, _, _, _ );
     queue->active->consumer_signalled = 1;
+    //@ close mk_net_queue(gactive, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 /**
@@ -317,8 +378,14 @@ void net_cancel_signal_active(struct net_queue_handle *queue)
  * @param queue queue handle of the free queue to check.
  */
 bool net_require_signal_free(struct net_queue_handle *queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gfree, _, _, _, _, _ );
     return !queue->free->consumer_signalled;
+    //@ close mk_net_queue(gfree, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 /**
@@ -327,8 +394,14 @@ bool net_require_signal_free(struct net_queue_handle *queue)
  * @param queue queue handle of the active queue to check.
  */
 bool net_require_signal_active(struct net_queue_handle *queue)
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
+    //@ open mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    //@ open mk_net_queue(gactive, _, _, _, _, _ );
     return !queue->active->consumer_signalled;
+    //@ close mk_net_queue(gactive, _, _, _, _, _);
+    //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
 
@@ -349,6 +422,10 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
     } */
 
     return -1;
+}
+
+void tx_provide_dequeue_enqueue(struct net_queue_handle *hnd) 
+{
 }
 
 void tx_provide(struct state *state)
