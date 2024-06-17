@@ -424,8 +424,23 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
     return -1;
 }
 
-void tx_provide_dequeue_enqueue(struct net_queue_handle *hnd) 
+void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv)
+//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
+//@ ensures true;
 {
+  uint64_t io_or_offset;
+  uint16_t len;
+  int err = net_dequeue_active(queue_client, &io_or_offset, &len);
+  if(err) {
+    abort();  	
+  }
+  if(io_or_offset % NET_BUFFER_SIZE || io_or_offset >= NET_BUFFER_SIZE * queue_client->size) {
+    err = net_enqueue_free(queue_client, io_or_offset, len);
+    if(err) {
+      abort();
+    }
+  }
+  // cache clean
 }
 
 void tx_provide(struct state *state)
