@@ -440,7 +440,9 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
       abort();
     }
   }
-  // cache clean
+  
+  net_enqueue_active(queue_drv, io_or_offset, len);
+  
 }
 
 void tx_provide(struct state *state)
