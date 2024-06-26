@@ -60,6 +60,8 @@ struct net_queue {
     
     uint64_t *io_or_offsets;
     uint16_t *lens;
+    
+    //@ bool dequeued;
 };
 
 /*@
@@ -424,9 +426,9 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
     return -1;
 }
 
-void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv)
+void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs, uint64_t client_paddrs)
 //@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
-//@ ensures true;
+//@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
 {
   uint64_t io_or_offset;
   uint16_t len;
@@ -434,15 +436,26 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
   if(err) {
     abort();  	
   }
-  if(io_or_offset % NET_BUFFER_SIZE || io_or_offset >= NET_BUFFER_SIZE * queue_client->size) {
+  //@open mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
+  uint64_t size = queue_client->size;
+  //@close mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
+  
+  if(io_or_offset % NET_BUFFER_SIZE || io_or_offset >= NET_BUFFER_SIZE * size) {
     err = net_enqueue_free(queue_client, io_or_offset, len);
     if(err) {
       abort();
     }
   }
+  // cache clean
   
-  net_enqueue_active(queue_drv, io_or_offset, len);
-  
+  err = net_enqueue_active(queue_drv, io_or_offset, len);
+  if(err) {
+    abort();
+  }
+}
+
+void example(struct net_queue_handle *tx_queue_clients, uint64_t len) {
+
 }
 
 void tx_provide(struct state *state)
@@ -487,6 +500,9 @@ void tx_provide(struct state *state)
         net_cancel_signal_active(&state->tx_queue_drv);
         microkit_notify_delayed(DRIVER);
     }
+}
+
+void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv) {
 }
 
 void tx_return(struct state *state)
