@@ -13,6 +13,7 @@
 #define LINE_START(a) ROUND_DOWN(a, CONFIG_L1_CACHE_LINE_SIZE_BITS)
 #define LINE_INDEX(a) (LINE_START(a)>>CONFIG_L1_CACHE_LINE_SIZE_BITS)
 
+typedef unsigned int microkit_channel;
 
 void microkit_notify(uint64_t ch);
 
@@ -61,11 +62,21 @@ struct net_queue {
     uint64_t *io_or_offsets;
     uint16_t *lens;
     
-    //@ bool dequeued;
+    //@ int ghost_io_or_offset;
+    //@ int len;
 };
 
+
 /*@
-  
+predicate ghost_io_perm(int io_or_offset);
+
+lemma int create_ghost_io_perm(int io_or_offset);
+  requires true;
+  ensures ghost_io_perm(io_or_offset);
+@*/
+
+// Goes away with Viper
+/*@
 predicate mk_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, uint64_t *io_or_offsets, uint16_t *lens) = 
   malloc_block_net_queue(q) &*& q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& 
   q->io_or_offsets |-> io_or_offsets &*& q->lens |-> lens &*&
@@ -83,6 +94,7 @@ struct net_queue_handle {
     uint32_t size;
 };
 
+// Goes away with Viper
 /*@
 predicate mk_net_queue_handle(struct net_queue_handle *q, struct net_queue *free, uint32_t ftail, uint32_t fhead, struct net_queue *active, uint32_t atail, uint32_t ahead, uint32_t size) = 
   malloc_block_net_queue_handle(q) &*& q->free |-> free &*& q->active |-> active &*& q->size |-> size &*& 
@@ -119,9 +131,10 @@ bool net_queue_empty_free(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
 //@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == !truncate_unsigned(ftail - fhead, 32);
 {
+    
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, ?active, atail, ahead, _);
     uint32_t size = queue->size;
-
+    // Nested opens goes away with Viper
     //@ open mk_net_queue(gfree, _, _, _, _, _);
     bool retval = !(/*@truncating@*/(queue->free->tail - queue->free->head));
     
@@ -144,7 +157,7 @@ bool net_queue_empty_active(struct net_queue_handle *queue)
 //@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == !truncate_unsigned(atail - ahead, 32); 
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
-    
+    // Nested opens goes away with Viper
     //@ open mk_net_queue(gactive, _, _, _, _, _);
     uint32_t tail_head = /*@truncating@*/(queue->active->tail - queue->active->head);
     bool retval = !(tail_head);
@@ -159,6 +172,7 @@ bool net_queue_full_free(struct net_queue_handle *queue)
 //@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(ftail + 1, 32) - fhead, 32) == gsize); 
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
+    // Nested opens goes away with Viper
     //@ open mk_net_queue(gfree, _, _, _, _, _);
     uint32_t tail1 = /*@truncating@*/(queue->free->tail + 1);
     uint32_t tail_head = /*@truncating@*/(tail1 - queue->free->head);
@@ -174,6 +188,7 @@ bool net_queue_full_active(struct net_queue_handle *queue)
 //@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(atail + 1, 32) - ahead, 32) == gsize); 
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
+    // Nested opens goes away with Viper
     //@ open mk_net_queue(gactive, _, _, _, _, _);
     
     uint32_t tail1 = /*@truncating@*/(queue->active->tail + 1);
@@ -454,10 +469,6 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
   }
 }
 
-void example(struct net_queue_handle *tx_queue_clients, uint64_t len) {
-
-}
-
 void tx_provide(struct state *state)
 {
     bool enqueued = false;
@@ -502,7 +513,23 @@ void tx_provide(struct state *state)
     }
 }
 
-void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv) {
+void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv) 
+//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
+//@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
+{
+  uint64_t io_or_offset = 0;
+  uint16_t len = 0;
+  int err = net_dequeue_free(queue_drv, &io_or_offset, &len);
+  if(err) {
+    abort();
+  }
+  
+  // client is implied because we assume only one client
+  
+  err = net_enqueue_free(queue_client, io_or_offset, len);
+  if(err) {
+    abort();
+  }
 }
 
 void tx_return(struct state *state)
