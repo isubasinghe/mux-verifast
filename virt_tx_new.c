@@ -76,11 +76,19 @@ lemma int create_ghost_io_perm(int io_or_offset);
 @*/
 
 // Goes away with Viper
+// Proving a predicate like this is a good way to establish all permissions to access a given struct (here net_queue) and its fields
+// This exposes them so preconditions or postconditions can access them later
 /*@
 predicate mk_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, uint64_t *io_or_offsets, uint16_t *lens) = 
+  // malloc_block_net_queue(q) is a VeriFast builtin that says that q points to a valid struct net_queue-sized region of memory
+  // &*& is separating conjunction. A |-> B says the (one) location being dereferenced in expression A will point to value B.
   malloc_block_net_queue(q) &*& q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& 
   q->io_or_offsets |-> io_or_offsets &*& q->lens |-> lens &*&
+  // malloc_block_ullongs(A, B) is a VeriFast builtin that says that there is a region of memory starting at A of size B unsigned long longs (uint64_t)
+  // similarly for malloc_block_ushorts for unsigned shorts (uint16_t)
   malloc_block_ullongs(io_or_offsets, RING_SIZE) &*& malloc_block_ushorts(lens, RING_SIZE) &*&
+  // using a variable ?B on the right-hand side of a |-> declares B as a ghost variable, it should then be referred to as B (without the question mark)
+  // after declaring A[0..x] |-> ?B, each entry within A can be referred to using B[0], B[1], ... B[RING_SIZE-1]
   io_or_offsets[0..RING_SIZE] |-> ?viofs &*& lens[0..RING_SIZE] |-> ?vlens;
 @*/
 
@@ -98,6 +106,7 @@ struct net_queue_handle {
 /*@
 predicate mk_net_queue_handle(struct net_queue_handle *q, struct net_queue *free, uint32_t ftail, uint32_t fhead, struct net_queue *active, uint32_t atail, uint32_t ahead, uint32_t size) = 
   malloc_block_net_queue_handle(q) &*& q->free |-> free &*& q->active |-> active &*& q->size |-> size &*& 
+  // the underscore _ is a don't-care value
   mk_net_queue(free, ftail, fhead, _, _, _) &*& mk_net_queue(active, atail, ahead, _, _, _);
 @*/
 
@@ -129,13 +138,18 @@ struct state {
 
 bool net_queue_empty_free(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
+// The first sep-conjunct of this ensures accounts for the memory that was talked about in the requirement.
+// Without either having this or explicitly deallocating that memory, VeriFast will complain of a memory leak.
 //@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == !truncate_unsigned(ftail - fhead, 32);
+// VeriFast will define a variable "result" for the return value of the function.
+// truncate_unsigned(A, B) is a VeriFast builtin that says to truncate the unsigned value of A to B bits
 {
     
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, ?active, atail, ahead, _);
     uint32_t size = queue->size;
-    // Nested opens goes away with Viper
+    // Nested opens goes away with Viper, because we expect Viper will implicitly open heap fragments reachable from the initial open as needed.
     //@ open mk_net_queue(gfree, _, _, _, _, _);
+    // This "truncating" attribute tells VeriFast not to overflow/underflow-check the following expression.
     bool retval = !(/*@truncating@*/(queue->free->tail - queue->free->head));
     
     //@close mk_net_queue(gfree, _, _, _, _, _);
