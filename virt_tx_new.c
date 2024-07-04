@@ -144,7 +144,8 @@ bool net_queue_empty_free(struct net_queue_handle *queue)
 // VeriFast will define a variable "result" for the return value of the function.
 // truncate_unsigned(A, B) is a VeriFast builtin that says to truncate the unsigned value of A to B bits
 {
-    
+    // Think of "open" as a destructor for a predicate about a region of memory to a set of predicates about the contituent parts of that region,
+    // as defined by the predicate's definition (in this case mk_net_queue_handle).
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, ?active, atail, ahead, _);
     uint32_t size = queue->size;
     // Nested opens goes away with Viper, because we expect Viper will implicitly open heap fragments reachable from the initial open as needed.
@@ -152,10 +153,12 @@ bool net_queue_empty_free(struct net_queue_handle *queue)
     // This "truncating" attribute tells VeriFast not to overflow/underflow-check the following expression.
     bool retval = !(/*@truncating@*/(queue->free->tail - queue->free->head));
     
+    // Think of "close" is a constructor of a predicate about a region from a set of smaller predicates about its constituents.
     //@close mk_net_queue(gfree, _, _, _, _, _);
     
     //@close mk_net_queue_handle(queue, gfree, _, _, active, _, _, _);
     return retval;
+    // By the end of the function, we're expected to supply the predicates expected by its "ensures".
     
 }
 
@@ -213,14 +216,21 @@ bool net_queue_full_active(struct net_queue_handle *queue)
     //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 }
 
+// This is a workaround to avoid having to do proofs about modulo, which is not well supported by many SMT solvers.
 uint64_t val_mod_size(uint64_t val, uint64_t size) 
 //@ requires size == RING_SIZE;
 //@ ensures result < RING_SIZE;
 {
+    // We use the keyword assume to tell VeriFast to take this as true.
+    // IMPORTANT: Uses of assume should be scrutinised as closely as a sorry or axiom!
     //@assume(val%size < size);
     uint64_t retval = val%size;
     return retval;
 }
+
+// You can define and use "fixpoint" functions for more complicated procedures inside preconditions and postconditions.
+// VeriFast allows these to be recursive but these examples aren't.
+// Note: Viper may have a different notation for this than "fixpoint".
 /*@
 fixpoint bool net_queue_full(int tail, int head, int size){
   return truncate_unsigned(truncate_unsigned(tail + 1, 32) - head, 32) == size;
@@ -436,7 +446,8 @@ bool net_require_signal_active(struct net_queue_handle *queue)
 }
 
 
-
+// This function, given a physical address and a state struct,
+// identifies the client that the physical address belongs to.
 int extract_offset(uintptr_t *phys, struct state *gstate)
 {
 
@@ -455,6 +466,7 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
     return -1;
 }
 
+// This is a manual simplification of tx_provide restricted only to a single client and for a single loop iteration.
 void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs, uint64_t client_paddrs)
 //@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
@@ -493,6 +505,7 @@ void tx_provide(struct state *state)
                 struct net_buff_desc buffer;
                 int err = net_dequeue_active(&state->tx_queue_clients[client], &buffer);
                 // assert(!err);
+                // This checks that the memory region given to us by the client is valid for use as a buffer.
                 if (buffer.io_or_offset % NET_BUFFER_SIZE ||
                     buffer.io_or_offset >= NET_BUFFER_SIZE * state->tx_queue_clients[client].size) {
                     /* sddf_dprintf("VIRT_TX|LOG: Client provided offset %lx which is not buffer aligned or outside of buffer region\n",
