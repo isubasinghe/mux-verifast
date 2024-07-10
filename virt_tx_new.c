@@ -1,6 +1,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+
+//@ #include "ghost_lists.gh"
+//@ #include "ghost_counters.gh"
+
 #define CONFIG_L1_CACHE_LINE_SIZE_BITS 64
 #define DRIVER 0
 #define CLIENT_CH 1
@@ -58,21 +62,20 @@ struct net_queue {
     /* flag to indicate whether consumer requires signalling */
     uint32_t consumer_signalled;
  
-    
+    // This is a change to the existing implementation to make verification easier.
+    // this used to be an array of structs containing <uint64_t, uint16_t>.
     uint64_t *io_or_offsets;
     uint16_t *lens;
-    
-    //@ int ghost_io_or_offset;
-    //@ int len;
 };
 
 
 /*@
-predicate ghost_io_perm(int io_or_offset);
+predicate ghost_io_perm(int id, int io_or_offset, int len);
 
-lemma int create_ghost_io_perm(int io_or_offset);
+lemma int create_ghost_io_perm(int io_or_offset, int len);
   requires true;
-  ensures ghost_io_perm(io_or_offset);
+  ensures ghost_io_perm(result, io_or_offset, len);
+  
 @*/
 
 // Goes away with Viper
@@ -236,6 +239,9 @@ fixpoint bool net_queue_full(int tail, int head, int size){
   return truncate_unsigned(truncate_unsigned(tail + 1, 32) - head, 32) == size;
 }
 
+fixpoint bool net_queue_empty(int tail, int head, int size) {
+  return !(truncate_unsigned(tail - head, 32));
+}
 fixpoint bool impl(bool cond1, bool cond2) {
   return !cond1 || cond2;
 }
@@ -243,7 +249,7 @@ fixpoint bool impl(bool cond1, bool cond2) {
 
 int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
-//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& impl(net_queue_full(ftail, fhead, gsize), result == -1) == true &*& impl(!net_queue_full(ftail, fhead, gsize), nftail == truncate_unsigned(ftail +1 ,32)) == true;
+//@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& impl(net_queue_full(ftail, fhead, gsize), result == -1) == true &*& impl(!net_queue_full(ftail, fhead, gsize), nftail == truncate_unsigned(ftail +1 ,32) && result == 0) == true;
 {
     if (net_queue_full_free(queue)) {
       return -1;
@@ -273,7 +279,7 @@ int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint
 
 int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
-//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, ?natail, ahead, gsize);
+//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, ?natail, ahead, gsize) &*& impl(net_queue_full(atail, ahead, gsize), result == -1) && impl(!net_queue_full(atail, ahead, gsize), natail == truncate_unsigned(atail + 1, 32) && result == 0);
 {
     if (net_queue_full_active(queue)) {
         return -1;
@@ -299,10 +305,20 @@ int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, ui
     return 0;
 }
 
+
+/* This precondition exists because of the fact that
+ ensures clauses must not conditionally contain permissions.
+ Viper will allow this functionality.
+*/
 int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len)
-//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& *io_or_offset |-> _ &*& *len |-> _;
-//@ ensures mk_net_queue_handle(queue, gfree, ftail, ?nfhead, gactive, atail, ahead, gsize) &*& *io_or_offset |-> _ &*& *len |-> _;
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& *io_or_offset |-> _ &*& *len |-> _ &*& !net_queue_empty(ftail, fhead, gsize);
+/*@ ensures mk_net_queue_handle(queue, gfree, ftail, ?nfhead, gactive, atail, ahead, gsize) &*& 
+	*io_or_offset |-> _ &*& *len |-> _ &*&
+		result == 0 &*&
+		nfhead == truncate_unsigned(fhead + 1, 32) &*& ghost_io_perm(_, _, _);
+@*/
 {
+  // With the precondition, this check never fails.
   if(net_queue_empty_free(queue)) {
     return -1;
   }
@@ -317,11 +333,13 @@ int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uin
   
   *io_or_offset = io_or_offsets[index];
   *len = lens[index];
+  //@ int io_perm = create_ghost_io_perm(*io_or_offset, *len);
 
   uint32_t new_head = /*@truncating@*/(free->head + 1);
   free->head = new_head;
-  
+
   //@close mk_net_queue(gfree, _, _, _, _, _);
+  
   
   //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
   return 0;
@@ -466,7 +484,8 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
     return -1;
 }
 
-// This is a manual simplification of tx_provide restricted only to a single client and for a single loop iteration.
+// This is a variant of the inner loop where there is only one client.
+// This was just done for simplification, in theory if it holds for one, it should hold for all.
 void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs, uint64_t client_paddrs)
 //@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
@@ -477,6 +496,7 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
   if(err) {
     abort();  	
   }
+  
   //@open mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
   uint64_t size = queue_client->size;
   //@close mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
@@ -493,8 +513,13 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
   if(err) {
     abort();
   }
+  
 }
 
+
+/*
+ The tx_provide and tx_return 
+*/
 void tx_provide(struct state *state)
 {
     bool enqueued = false;
@@ -541,7 +566,7 @@ void tx_provide(struct state *state)
 }
 
 void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv) 
-//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
+//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE &*& !net_queue_empty(dftail, dfhead, dgsize);
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
 {
   uint64_t io_or_offset = 0;
