@@ -273,7 +273,10 @@ int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint
 }
 
 int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
-//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+/*@
+ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
+    ghost_io_perm(_, _, _) &*& !net_queue_full(atail, ahead, gsize);
+@*/
 //@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, ?natail, ahead, gsize) &*& impl(net_queue_full(atail, ahead, gsize), result == -1) && impl(!net_queue_full(atail, ahead, gsize), natail == truncate_unsigned(atail + 1, 32) && result == 0);
 {
     if (net_queue_full_active(queue))
@@ -293,7 +296,7 @@ int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, ui
     lens[index] = 0;
     uint32_t new_tail = /*@truncating@*/ (active->tail + 1);
     active->tail = new_tail;
-
+    //@ leak ghost_io_perm(_, _, _);
     //@ close mk_net_queue(gactive, new_tail, _, _, _, _);
 
     //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, new_tail, ahead, gsize);
@@ -489,7 +492,7 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
 /*@
  requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
     mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE &*&
-    !net_queue_empty(atail, ahead, gsize) && !net_queue_full(ftail, fhead, gsize);
+    !net_queue_empty(atail, ahead, gsize) && !net_queue_full(ftail, fhead, gsize) &*& !net_queue_full(datail, dahead, gsize);
 @*/
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
 {
