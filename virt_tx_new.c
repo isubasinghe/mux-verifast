@@ -15,7 +15,7 @@
 
 #define ROUND_DOWN(n, b) (((n) >> (b)) << (b))
 #define LINE_START(a) ROUND_DOWN(a, CONFIG_L1_CACHE_LINE_SIZE_BITS)
-#define LINE_INDEX(a) (LINE_START(a)>>CONFIG_L1_CACHE_LINE_SIZE_BITS)
+#define LINE_INDEX(a) (LINE_START(a) >> CONFIG_L1_CACHE_LINE_SIZE_BITS)
 
 typedef unsigned int microkit_channel;
 
@@ -29,45 +29,42 @@ dsb(void)
     // asm volatile("dsb sy" ::: "memory");
 }
 
-void 
-dmb(void)
+void dmb(void)
 {
     // asm volatile("dmb sy" ::: "memory");
 }
 
-
-void
-clean_by_va(unsigned long vaddr)
+void clean_by_va(unsigned long vaddr)
 {
     // asm volatile("dc cvac, %0" : : "r"(vaddr));
     dmb();
 }
-void
-cache_clean(unsigned long start, unsigned long end)
+void cache_clean(unsigned long start, unsigned long end)
 {
     unsigned long line;
     unsigned long index;
 
-    for (index = LINE_INDEX(start); index < LINE_INDEX(end) + 1; index++) {
+    for (index = LINE_INDEX(start); index < LINE_INDEX(end) + 1; index++)
+    {
         line = index << CONFIG_L1_CACHE_LINE_SIZE_BITS;
         clean_by_va(line);
     }
 }
 
-struct net_queue {
+struct net_queue
+{
     /* index to insert at */
     uint32_t tail;
     /* index to remove from */
     uint32_t head;
     /* flag to indicate whether consumer requires signalling */
     uint32_t consumer_signalled;
- 
+
     // This is a change to the existing implementation to make verification easier.
     // this used to be an array of structs containing <uint64_t, uint16_t>.
     uint64_t *io_or_offsets;
     uint16_t *lens;
 };
-
 
 /*@
 predicate ghost_io_perm(int id, int io_or_offset, int len);
@@ -75,17 +72,17 @@ predicate ghost_io_perm(int id, int io_or_offset, int len);
 lemma int create_ghost_io_perm(int io_or_offset, int len);
   requires true;
   ensures ghost_io_perm(result, io_or_offset, len);
-  
+
 @*/
 
 // Goes away with Viper
 // Proving a predicate like this is a good way to establish all permissions to access a given struct (here net_queue) and its fields
 // This exposes them so preconditions or postconditions can access them later
 /*@
-predicate mk_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, uint64_t *io_or_offsets, uint16_t *lens) = 
+predicate mk_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32_t consumer_signalled, uint64_t *io_or_offsets, uint16_t *lens) =
   // malloc_block_net_queue(q) is a VeriFast builtin that says that q points to a valid struct net_queue-sized region of memory
   // &*& is separating conjunction. A |-> B says the (one) location being dereferenced in expression A will point to value B.
-  malloc_block_net_queue(q) &*& q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*& 
+  malloc_block_net_queue(q) &*& q->tail |-> tail &*& q->head |-> head &*& q->consumer_signalled |-> consumer_signalled &*&
   q->io_or_offsets |-> io_or_offsets &*& q->lens |-> lens &*&
   // malloc_block_ullongs(A, B) is a VeriFast builtin that says that there is a region of memory starting at A of size B unsigned long longs (uint64_t)
   // similarly for malloc_block_ushorts for unsigned shorts (uint16_t)
@@ -95,11 +92,11 @@ predicate mk_net_queue(struct net_queue *q, uint32_t tail, uint32_t head, uint32
   io_or_offsets[0..RING_SIZE] |-> ?viofs &*& lens[0..RING_SIZE] |-> ?vlens;
 @*/
 
-
-struct net_queue_handle {
-     /* available buffers */
+struct net_queue_handle
+{
+    /* available buffers */
     struct net_queue *free;
-     /* filled buffers */
+    /* filled buffers */
     struct net_queue *active;
     /* size of the queues */
     uint32_t size;
@@ -107,12 +104,11 @@ struct net_queue_handle {
 
 // Goes away with Viper
 /*@
-predicate mk_net_queue_handle(struct net_queue_handle *q, struct net_queue *free, uint32_t ftail, uint32_t fhead, struct net_queue *active, uint32_t atail, uint32_t ahead, uint32_t size) = 
-  malloc_block_net_queue_handle(q) &*& q->free |-> free &*& q->active |-> active &*& q->size |-> size &*& 
+predicate mk_net_queue_handle(struct net_queue_handle *q, struct net_queue *free, uint32_t ftail, uint32_t fhead, struct net_queue *active, uint32_t atail, uint32_t ahead, uint32_t size) =
+  malloc_block_net_queue_handle(q) &*& q->free |-> free &*& q->active |-> active &*& q->size |-> size &*&
   // the underscore _ is a don't-care value
   mk_net_queue(free, ftail, fhead, _, _, _) &*& mk_net_queue(active, atail, ahead, _, _, _);
 @*/
-
 
 uintptr_t tx_free_drv;
 uintptr_t tx_active_drv;
@@ -131,13 +127,13 @@ uintptr_t buffer_data_region_arp_paddr;
 uintptr_t buffer_data_region_cli0_paddr;
 uintptr_t buffer_data_region_cli1_paddr;
 
-struct state {
+struct state
+{
     struct net_queue_handle tx_queue_drv;
     struct net_queue_handle tx_queue_clients[NUM_CLIENTS];
     uintptr_t buffer_region_vaddrs[NUM_CLIENTS];
     uintptr_t buffer_region_paddrs[NUM_CLIENTS];
 };
-
 
 bool net_queue_empty_free(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
@@ -154,15 +150,14 @@ bool net_queue_empty_free(struct net_queue_handle *queue)
     // Nested opens goes away with Viper, because we expect Viper will implicitly open heap fragments reachable from the initial open as needed.
     //@ open mk_net_queue(gfree, _, _, _, _, _);
     // This "truncating" attribute tells VeriFast not to overflow/underflow-check the following expression.
-    bool retval = !(/*@truncating@*/(queue->free->tail - queue->free->head));
-    
+    bool retval = !(/*@truncating@*/ (queue->free->tail - queue->free->head));
+
     // Think of "close" is a constructor of a predicate about a region from a set of smaller predicates about its constituents.
     //@close mk_net_queue(gfree, _, _, _, _, _);
-    
+
     //@close mk_net_queue_handle(queue, gfree, _, _, active, _, _, _);
     return retval;
     // By the end of the function, we're expected to supply the predicates expected by its "ensures".
-    
 }
 
 /**
@@ -174,45 +169,44 @@ bool net_queue_empty_free(struct net_queue_handle *queue)
  */
 bool net_queue_empty_active(struct net_queue_handle *queue)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
-//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == !truncate_unsigned(atail - ahead, 32); 
+//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == !truncate_unsigned(atail - ahead, 32);
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     // Nested opens goes away with Viper
     //@ open mk_net_queue(gactive, _, _, _, _, _);
-    uint32_t tail_head = /*@truncating@*/(queue->active->tail - queue->active->head);
+    uint32_t tail_head = /*@truncating@*/ (queue->active->tail - queue->active->head);
     bool retval = !(tail_head);
     //@ close mk_net_queue(gactive, _, _, _, _, _);
-    
+
     //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     return retval;
 }
 
 bool net_queue_full_free(struct net_queue_handle *queue)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
-//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(ftail + 1, 32) - fhead, 32) == gsize); 
+//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(ftail + 1, 32) - fhead, 32) == gsize);
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     // Nested opens goes away with Viper
     //@ open mk_net_queue(gfree, _, _, _, _, _);
-    uint32_t tail1 = /*@truncating@*/(queue->free->tail + 1);
-    uint32_t tail_head = /*@truncating@*/(tail1 - queue->free->head);
+    uint32_t tail1 = /*@truncating@*/ (queue->free->tail + 1);
+    uint32_t tail_head = /*@truncating@*/ (tail1 - queue->free->head);
     bool retval = tail_head == queue->size;
     //@ close mk_net_queue(gfree, _, _, _, _, _);
     //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
     return retval;
 }
 
-
 bool net_queue_full_active(struct net_queue_handle *queue)
 //@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize);
-//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(atail + 1, 32) - ahead, 32) == gsize); 
+//@ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize) &*& result == (truncate_unsigned(truncate_unsigned(atail + 1, 32) - ahead, 32) == gsize);
 {
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     // Nested opens goes away with Viper
     //@ open mk_net_queue(gactive, _, _, _, _, _);
-    
-    uint32_t tail1 = /*@truncating@*/(queue->active->tail + 1);
-    uint32_t tail_head = /*@truncating@*/(tail1 - queue->active->head);
+
+    uint32_t tail1 = /*@truncating@*/ (queue->active->tail + 1);
+    uint32_t tail_head = /*@truncating@*/ (tail1 - queue->active->head);
     bool retval = tail_head == queue->size;
     return retval;
     //@ close mk_net_queue(gactive, _, _, _, _, _);
@@ -220,14 +214,14 @@ bool net_queue_full_active(struct net_queue_handle *queue)
 }
 
 // This is a workaround to avoid having to do proofs about modulo, which is not well supported by many SMT solvers.
-uint64_t val_mod_size(uint64_t val, uint64_t size) 
+uint64_t val_mod_size(uint64_t val, uint64_t size)
 //@ requires size == RING_SIZE;
 //@ ensures result < RING_SIZE;
 {
     // We use the keyword assume to tell VeriFast to take this as true.
     // IMPORTANT: Uses of assume should be scrutinised as closely as a sorry or axiom!
     //@assume(val%size < size);
-    uint64_t retval = val%size;
+    uint64_t retval = val % size;
     return retval;
 }
 
@@ -248,32 +242,33 @@ fixpoint bool impl(bool cond1, bool cond2) {
 @*/
 
 int net_enqueue_free(struct net_queue_handle *queue, uint64_t io_or_offset, uint16_t len)
-//@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
+//@requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& ghost_io_perm(?id, ?iof, ?llen) &*& !net_queue_full(ftail, fhead, gsize);
 //@ensures mk_net_queue_handle(queue, gfree, ?nftail, fhead, gactive, atail, ahead, gsize) &*& impl(net_queue_full(ftail, fhead, gsize), result == -1) == true &*& impl(!net_queue_full(ftail, fhead, gsize), nftail == truncate_unsigned(ftail +1 ,32) && result == 0) == true;
 {
-    if (net_queue_full_free(queue)) {
-      return -1;
+    if (net_queue_full_free(queue))
+    {
+        return -1;
     }
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     uint32_t size = queue->size;
     struct net_queue *free = queue->free;
-    
+
     //@open mk_net_queue(gfree, ftail, _, _, _, _);
-  
+
     uint64_t *io_or_offsets = free->io_or_offsets;
     uint16_t *lens = free->lens;
     uint64_t index = val_mod_size(free->tail, queue->size);
-    
+
     io_or_offsets[index] = io_or_offset;
     lens[index] = len;
-    
-    uint32_t new_tail = /*@truncating@*/(free->tail + 1);
+
+    uint32_t new_tail = /*@truncating@*/ (free->tail + 1);
     free->tail = new_tail;
-    
+    //@ leak ghost_io_perm(_, _, _);
     //@close mk_net_queue(gfree, new_tail, _, _, _, _);
-    
+
     //@close mk_net_queue_handle(queue, gfree, new_tail, fhead, gactive, atail, ahead, gsize);
-    
+
     return 0;
 }
 
@@ -281,77 +276,82 @@ int net_enqueue_active(struct net_queue_handle *queue, uint64_t io_or_offset, ui
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
 //@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, ?natail, ahead, gsize) &*& impl(net_queue_full(atail, ahead, gsize), result == -1) && impl(!net_queue_full(atail, ahead, gsize), natail == truncate_unsigned(atail + 1, 32) && result == 0);
 {
-    if (net_queue_full_active(queue)) {
+    if (net_queue_full_active(queue))
+    {
         return -1;
     }
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     uint32_t size = queue->size;
     struct net_queue *active = queue->active;
-    
+
     //@ open mk_net_queue(gactive, atail, _, _, _, _);
     uint64_t *io_or_offsets = active->io_or_offsets;
     uint16_t *lens = active->lens;
     uint64_t index = val_mod_size(active->tail, size);
-    
+
     io_or_offsets[index] = 0;
     lens[index] = 0;
-    uint32_t new_tail = /*@truncating@*/(active->tail + 1);
+    uint32_t new_tail = /*@truncating@*/ (active->tail + 1);
     active->tail = new_tail;
-    
+
     //@ close mk_net_queue(gactive, new_tail, _, _, _, _);
-    
+
     //@ close mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, new_tail, ahead, gsize);
 
     return 0;
 }
-
 
 /* This precondition exists because of the fact that
  ensures clauses must not conditionally contain permissions.
  Viper will allow this functionality.
 */
 int net_dequeue_free(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len)
-//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& *io_or_offset |-> _ &*& *len |-> _ &*& !net_queue_empty(ftail, fhead, gsize);
-/*@ ensures mk_net_queue_handle(queue, gfree, ftail, ?nfhead, gactive, atail, ahead, gsize) &*& 
-	*io_or_offset |-> _ &*& *len |-> _ &*&
-		result == 0 &*&
-		nfhead == truncate_unsigned(fhead + 1, 32) &*& ghost_io_perm(_, _, _);
+/*@
+  requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
+  *io_or_offset |-> _ &*& *len |-> _ &*& !net_queue_empty(ftail, fhead, gsize);
+@*/
+/*@ ensures mk_net_queue_handle(queue, gfree, ftail, ?nfhead, gactive, atail, ahead, gsize) &*&
+    *io_or_offset |-> _ &*& *len |-> _ &*&
+        result == 0 &*&
+        nfhead == truncate_unsigned(fhead + 1, 32) &*& ghost_io_perm(_, _, _);
 @*/
 {
-  // With the precondition, this check never fails.
-  if(net_queue_empty_free(queue)) {
-    return -1;
-  }
-  //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
-  uint32_t size = queue->size;
-  struct net_queue *free = queue->free;
-  
-  //@ open mk_net_queue(gfree, _, _, _, _, _);
-  uint64_t *io_or_offsets = free->io_or_offsets;
-  uint16_t *lens = free->lens;
-  uint64_t index = val_mod_size(free->head, size);
-  
-  *io_or_offset = io_or_offsets[index];
-  *len = lens[index];
-  //@ int io_perm = create_ghost_io_perm(*io_or_offset, *len);
+    // With the precondition, this check never fails.
+    if (net_queue_empty_free(queue))
+    {
+        return -1;
+    }
+    //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
+    uint32_t size = queue->size;
+    struct net_queue *free = queue->free;
 
-  uint32_t new_head = /*@truncating@*/(free->head + 1);
-  free->head = new_head;
+    //@ open mk_net_queue(gfree, _, _, _, _, _);
+    uint64_t *io_or_offsets = free->io_or_offsets;
+    uint16_t *lens = free->lens;
+    uint64_t index = val_mod_size(free->head, size);
 
-  //@close mk_net_queue(gfree, _, _, _, _, _);
-  
-  
-  //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
-  return 0;
-  
+    *io_or_offset = io_or_offsets[index];
+    *len = lens[index];
+    //@ int io_perm = create_ghost_io_perm(*io_or_offset, *len);
+
+    uint32_t new_head = /*@truncating@*/ (free->head + 1);
+    free->head = new_head;
+
+    //@close mk_net_queue(gfree, _, _, _, _, _);
+
+    //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
+    return 0;
 }
 
 int net_dequeue_active(struct net_queue_handle *queue, uint64_t *io_or_offset, uint16_t *len)
-//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&  *io_or_offset |-> _ &*& *len |-> _;
-//@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ?nahead, gsize) &*& *io_or_offset |-> _ &*& *len |-> _;
+//@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&  *io_or_offset |-> _ &*& *len |-> _ &*& !net_queue_empty(atail, ahead, gsize);
+/*@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ?nahead, gsize) &*&
+    *io_or_offset |-> _ &*& *len |-> _ &*& ghost_io_perm(_, _, _);
+@*/
 {
-    if (net_queue_empty_active(queue)) {
-      return -1;
+    if (net_queue_empty_active(queue))
+    {
+        return -1;
     }
     //@ open mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
     uint32_t size = queue->size;
@@ -361,13 +361,14 @@ int net_dequeue_active(struct net_queue_handle *queue, uint64_t *io_or_offset, u
     uint64_t index = val_mod_size(queue->active->head, size);
     *io_or_offset = io_or_offsets[index];
     *len = lens[index];
-    uint32_t new_head = /*@truncating@*/(queue->active->head + 1);
+    //@ int io_perm = create_ghost_io_perm(*io_or_offset, *len);
+    uint32_t new_head = /*@truncating@*/ (queue->active->head + 1);
     queue->active->head = new_head;
-    
+
     //@close mk_net_queue(gactive, _, _, _, _, _);
-    
+
     //@close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
-    
+
     return 0;
 }
 
@@ -378,13 +379,13 @@ void net_queue_init(struct net_queue_handle *queue, struct net_queue *free, stru
     queue->size = size;
 }
 
-void net_buffers_init(struct net_queue_handle *queue, uintptr_t base_addr)
-{
-    for (uint32_t i = 0; i < queue->size - 1; i++) {
-        struct net_buff_desc buffer = {(NET_BUFFER_SIZE * i) + base_addr, 0};
-        int err = net_enqueue_free(queue, buffer);
-    }
-}
+// void net_buffers_init(struct net_queue_handle *queue, uintptr_t base_addr)
+// {
+//     for (uint32_t i = 0; i < queue->size - 1; i++) {
+//         struct net_buff_desc buffer = {(NET_BUFFER_SIZE * i) + base_addr, 0};
+//         int err = net_enqueue_free(queue, buffer);
+//     }
+// }
 
 void net_request_signal_free(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
@@ -408,7 +409,7 @@ void net_request_signal_active(struct net_queue_handle *queue)
     //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
-void net_cancel_signal_free(struct net_queue_handle*queue)
+void net_cancel_signal_free(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
 //@ ensures mk_net_queue_handle(queue, gfree, ftail, fhead, gactive, atail, ahead, gsize);
 {
@@ -418,7 +419,6 @@ void net_cancel_signal_free(struct net_queue_handle*queue)
     //@ close mk_net_queue(gfree, _, _, _, _, _);
     //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
-
 
 void net_cancel_signal_active(struct net_queue_handle *queue)
 //@ requires mk_net_queue_handle(queue, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE;
@@ -463,7 +463,6 @@ bool net_require_signal_active(struct net_queue_handle *queue)
     //@ close mk_net_queue_handle(queue, _, _, _, _, _, _, _);
 }
 
-
 // This function, given a physical address and a state struct,
 // identifies the client that the physical address belongs to.
 int extract_offset(uintptr_t *phys, struct state *gstate)
@@ -487,137 +486,136 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
 // This is a variant of the inner loop where there is only one client.
 // This was just done for simplification, in theory if it holds for one, it should hold for all.
 void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs, uint64_t client_paddrs)
-//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE;
+/*@
+ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
+    mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE &*&
+    !net_queue_empty(atail, ahead, gsize) && !net_queue_full(ftail, fhead, gsize);
+@*/
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
 {
-  uint64_t io_or_offset;
-  uint16_t len;
-  int err = net_dequeue_active(queue_client, &io_or_offset, &len);
-  if(err) {
-    abort();  	
-  }
-  
-  //@open mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
-  uint64_t size = queue_client->size;
-  //@close mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
-  
-  if(io_or_offset % NET_BUFFER_SIZE || io_or_offset >= NET_BUFFER_SIZE * size) {
-    err = net_enqueue_free(queue_client, io_or_offset, len);
-    if(err) {
-      abort();
-    }
-  }
-  // cache clean
-  
-  err = net_enqueue_active(queue_drv, io_or_offset, len);
-  if(err) {
-    abort();
-  }
-  
-}
+    uint64_t io_or_offset;
+    uint16_t len;
+    net_dequeue_active(queue_client, &io_or_offset, &len);
 
+    //@open mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
+    uint64_t size = queue_client->size;
+    //@close mk_net_queue_handle(queue_client, _, _, _, _, _, _, _);
+
+    if (io_or_offset % NET_BUFFER_SIZE || io_or_offset >= NET_BUFFER_SIZE * size)
+    {
+        net_enqueue_free(queue_client, io_or_offset, len);
+    }else {
+        net_enqueue_active(queue_drv, io_or_offset, len);
+    }
+}
 
 /*
- The tx_provide and tx_return 
+ The tx_provide and tx_return
 */
-void tx_provide(struct state *state)
-{
-    bool enqueued = false;
-    for (int client = 0; client < NUM_CLIENTS; client++) {
-        bool reprocess = true;
-        while (reprocess) {
-            while (!net_queue_empty_active(&state->tx_queue_clients[client])) {
-                struct net_buff_desc buffer;
-                int err = net_dequeue_active(&state->tx_queue_clients[client], &buffer);
-                // assert(!err);
-                // This checks that the memory region given to us by the client is valid for use as a buffer.
-                if (buffer.io_or_offset % NET_BUFFER_SIZE ||
-                    buffer.io_or_offset >= NET_BUFFER_SIZE * state->tx_queue_clients[client].size) {
-                    /* sddf_dprintf("VIRT_TX|LOG: Client provided offset %lx which is not buffer aligned or outside of buffer region\n",
-                                 buffer.io_or_offset); */
-                    err = net_enqueue_free(&state->tx_queue_clients[client], buffer);
-                    // assert(!err);
-                    continue;
-                }
+// void tx_provide(struct state *state)
+// {
+//     bool enqueued = false;
+//     for (int client = 0; client < NUM_CLIENTS; client++) {
+//         bool reprocess = true;
+//         while (reprocess) {
+//             while (!net_queue_empty_active(&state->tx_queue_clients[client])) {
+//                 struct net_buff_desc buffer;
+//                 int err = net_dequeue_active(&state->tx_queue_clients[client], &buffer);
+//                 // assert(!err);
+//                 // This checks that the memory region given to us by the client is valid for use as a buffer.
+//                 if (buffer.io_or_offset % NET_BUFFER_SIZE ||
+//                     buffer.io_or_offset >= NET_BUFFER_SIZE * state->tx_queue_clients[client].size) {
+//                     /* sddf_dprintf("VIRT_TX|LOG: Client provided offset %lx which is not buffer aligned or outside of buffer region\n",
+//                                  buffer.io_or_offset); */
+//                     err = net_enqueue_free(&state->tx_queue_clients[client], buffer);
+//                     // assert(!err);
+//                     continue;
+//                 }
 
-                cache_clean(buffer.io_or_offset + state->buffer_region_vaddrs[client],
-                            buffer.io_or_offset + state->buffer_region_vaddrs[client] + buffer.len);
+//                 cache_clean(buffer.io_or_offset + state->buffer_region_vaddrs[client],
+//                             buffer.io_or_offset + state->buffer_region_vaddrs[client] + buffer.len);
 
-                buffer.io_or_offset = buffer.io_or_offset + state->buffer_region_paddrs[client];
-                err = net_enqueue_active(&state->tx_queue_drv, buffer);
-                assert(!err);
-                enqueued = true;
-            }
+//                 buffer.io_or_offset = buffer.io_or_offset + state->buffer_region_paddrs[client];
+//                 err = net_enqueue_active(&state->tx_queue_drv, buffer);
+//                 assert(!err);
+//                 enqueued = true;
+//             }
 
-            net_request_signal_active(&state->tx_queue_clients[client]);
-            reprocess = false;
+//             net_request_signal_active(&state->tx_queue_clients[client]);
+//             reprocess = false;
 
-            if (!net_queue_empty_active(&state->tx_queue_clients[client])) {
-                net_cancel_signal_active(&state->tx_queue_clients[client]);
-                reprocess = true;
-            }
-        }
-    }
+//             if (!net_queue_empty_active(&state->tx_queue_clients[client])) {
+//                 net_cancel_signal_active(&state->tx_queue_clients[client]);
+//                 reprocess = true;
+//             }
+//         }
+//     }
 
-    if (enqueued && net_require_signal_active(&state->tx_queue_drv)) {
-        net_cancel_signal_active(&state->tx_queue_drv);
-        microkit_notify_delayed(DRIVER);
-    }
-}
+//     if (enqueued && net_require_signal_active(&state->tx_queue_drv)) {
+//         net_cancel_signal_active(&state->tx_queue_drv);
+//         microkit_notify_delayed(DRIVER);
+//     }
+// }
 
-void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv) 
-//@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*& mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE &*& !net_queue_empty(dftail, dfhead, dgsize);
+void tx_return_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv)
+/*@
+requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
+    mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*&
+    dgsize == RING_SIZE &*& !net_queue_empty(dftail, dfhead, dgsize) &*& !net_queue_full(ftail, fhead, gsize);
+@*/
 //@ ensures mk_net_queue_handle(queue_client, _, _, _, _, _, _, _) &*& mk_net_queue_handle(queue_drv, _, _, _, _, _, _, _);
 {
-  uint64_t io_or_offset = 0;
-  uint16_t len = 0;
-  int err = net_dequeue_free(queue_drv, &io_or_offset, &len);
-  if(err) {
-    abort();
-  }
-  
-  // client is implied because we assume only one client
-  
-  err = net_enqueue_free(queue_client, io_or_offset, len);
-  if(err) {
-    abort();
-  }
-}
-
-void tx_return(struct state *state)
-{
-    bool reprocess = true;
-    bool notify_clients[NUM_CLIENTS] = {false};
-    while (reprocess) {
-        while (!net_queue_empty_free(&state->tx_queue_drv)) {
-            struct net_buff_desc buffer;
-            int err = net_dequeue_free(&state->tx_queue_drv, &buffer.io_or_offset, &buffer.len);
-            assert(!err);
-
-            int client = extract_offset(&buffer.io_or_offset, state);
-            assert(client >= 0);
-
-            err = net_enqueue_free(&state->tx_queue_clients[client], buffer);
-            assert(!err);
-            notify_clients[client] = true;
-        }
-
-        net_request_signal_free(&state->tx_queue_drv);
-        reprocess = false;
-
-        if (!net_queue_empty_free(&state->tx_queue_drv)) {
-            net_cancel_signal_free(&state->tx_queue_drv);
-            reprocess = true;
-        }
+    uint64_t io_or_offset = 0;
+    uint16_t len = 0;
+    int err = net_dequeue_free(queue_drv, &io_or_offset, &len);
+    if (err)
+    {
+        abort();
     }
 
-    for (int client = 0; client < NUM_CLIENTS; client++) {
-        if (notify_clients[client] && net_require_signal_free(&state->tx_queue_clients[client])) {
-            net_cancel_signal_free(&state->tx_queue_clients[client]);
-            microkit_notify(client + CLIENT_CH);
-        }
+    // client is implied because we assume only one client
+
+    err = net_enqueue_free(queue_client, io_or_offset, len);
+    if (err)
+    {
+        abort();
     }
 }
+
+// void tx_return(struct state *state)
+// {
+//     bool reprocess = true;
+//     bool notify_clients[NUM_CLIENTS] = {false};
+//     while (reprocess) {
+//         while (!net_queue_empty_free(&state->tx_queue_drv)) {
+//             struct net_buff_desc buffer;
+//             int err = net_dequeue_free(&state->tx_queue_drv, &buffer.io_or_offset, &buffer.len);
+//             assert(!err);
+
+//             int client = extract_offset(&buffer.io_or_offset, state);
+//             assert(client >= 0);
+
+//             err = net_enqueue_free(&state->tx_queue_clients[client], buffer);
+//             assert(!err);
+//             notify_clients[client] = true;
+//         }
+
+//         net_request_signal_free(&state->tx_queue_drv);
+//         reprocess = false;
+
+//         if (!net_queue_empty_free(&state->tx_queue_drv)) {
+//             net_cancel_signal_free(&state->tx_queue_drv);
+//             reprocess = true;
+//         }
+//     }
+
+//     for (int client = 0; client < NUM_CLIENTS; client++) {
+//         if (notify_clients[client] && net_require_signal_free(&state->tx_queue_clients[client])) {
+//             net_cancel_signal_free(&state->tx_queue_clients[client]);
+//             microkit_notify(client + CLIENT_CH);
+//         }
+//     }
+// }
 
 /* void notified(microkit_channel ch)
 {
@@ -640,9 +638,9 @@ void tx_return(struct state *state)
 }
 */
 
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 //@ requires true;
 //@ ensures true;
 {
-  return 0;
+    return 0;
 }
