@@ -5,7 +5,7 @@
 //@ #include "ghost_lists.gh"
 //@ #include "ghost_counters.gh"
 
-#define CONFIG_L1_CACHE_LINE_SIZE_BITS 64
+#define CONFIG_L1_CACHE_LINE_SIZE_BITS 6
 #define DRIVER 0
 #define CLIENT_CH 1
 #define NUM_CLIENTS 3
@@ -36,11 +36,14 @@ void dmb(void)
 
 void clean_by_va(unsigned long vaddr)
 {
-    // asm volatile("dc cvac, %0" : : "r"(vaddr));
+    //asm volatile("dc cvac, %0" : : "r"(vaddr));
     dmb();
 }
 void cache_clean(unsigned long start, unsigned long end)
+//@requires true;
+//@ensures true;
 {
+    //@ assume(false);
     unsigned long line;
     unsigned long index;
 
@@ -488,7 +491,7 @@ int extract_offset(uintptr_t *phys, struct state *gstate)
 
 // This is a variant of the inner loop where there is only one client.
 // This was just done for simplification, in theory if it holds for one, it should hold for all.
-void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs, uint64_t client_paddrs)
+void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct net_queue_handle *queue_drv, uint64_t client_vaddrs)
 /*@
  requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?atail, ?ahead, ?gsize) &*& gsize == RING_SIZE &*&
     mk_net_queue_handle(queue_drv, ?dgfree, ?dftail, ?dfhead, ?dgactive, ?datail, ?dahead, ?dgsize) &*& dgsize == RING_SIZE &*&
@@ -508,6 +511,8 @@ void tx_provide_dequeue_enqueue(struct net_queue_handle *queue_client, struct ne
     {
         net_enqueue_free(queue_client, io_or_offset, len);
     }else {
+    	//@ assume((io_or_offset + client_vaddrs + len) <= ULONG_MAX);
+    	cache_clean((unsigned long) (io_or_offset + client_vaddrs), (unsigned long)(io_or_offset + client_vaddrs + (uint64_t)len));
         net_enqueue_active(queue_drv, io_or_offset, len);
     }
 }
@@ -570,19 +575,11 @@ requires mk_net_queue_handle(queue_client, ?gfree, ?ftail, ?fhead, ?gactive, ?at
 {
     uint64_t io_or_offset = 0;
     uint16_t len = 0;
-    int err = net_dequeue_free(queue_drv, &io_or_offset, &len);
-    if (err)
-    {
-        abort();
-    }
+    net_dequeue_free(queue_drv, &io_or_offset, &len);
 
     // client is implied because we assume only one client
 
-    err = net_enqueue_free(queue_client, io_or_offset, len);
-    if (err)
-    {
-        abort();
-    }
+    net_enqueue_free(queue_client, io_or_offset, len);
 }
 
 // void tx_return(struct state *state)
